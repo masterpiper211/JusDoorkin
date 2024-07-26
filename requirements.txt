@@ -1,0 +1,7 @@
+requests==2.31.0
+pyfiglet==0.8.post1
+colorama==0.4.6
+tqdm==4.65.0
+ratelimit==2.2.1
+validators==0.20.0
+plotly==5.10.0
