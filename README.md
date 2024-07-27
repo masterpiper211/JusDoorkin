@@ -22,7 +22,7 @@ To install JusDoorkin, follow these steps:
 
 2. Clone the repository:
    ```
-   git clone https://github.com/yourusername/jusdoorkin.git
+   git clone https://github.com/masterpiper211/jusdoorkin.git
    cd jusdoorkin
    ```
 
