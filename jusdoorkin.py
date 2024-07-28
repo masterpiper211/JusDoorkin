@@ -18,6 +18,13 @@ import plotly.offline as pyo
 import logging
 from requests.exceptions import RequestException, HTTPError, ConnectionError, Timeout
 import validators
+import socket
+import whois
+import ssl
+import OpenSSL
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+from html.parser import HTMLParser
 
 # Initialize colorama for cross-platform colored terminal text
 init(autoreset=True)
@@ -32,10 +39,7 @@ logger = logging.getLogger(__name__)
 
 class JusDoorkin:
     """
-    A class for performing Google dorking and analyzing results.
-
-    This class provides methods for generating and executing Google dork queries,
-    analyzing the results, and generating reports.
+    An enhanced class for performing Google dorking, analyzing results, and conducting additional security checks.
     """
 
     def __init__(self, output_dir="results"):
@@ -59,6 +63,11 @@ class JusDoorkin:
             "cloud_storage": 'site:{domain} (inurl:s3.amazonaws.com | inurl:storage.googleapis.com | inurl:azure)',
             "social_media": 'site:{domain} (inurl:facebook | inurl:twitter | inurl:linkedin | inurl:instagram)',
             "wordpress_files": 'site:{domain} inurl:wp-content | inurl:wp-includes',
+            "github_leaks": 'site:github.com {domain} password||api_key||secret',
+            "pastebin_leaks": 'site:pastebin.com {domain}',
+            "exposed_env_files": 'site:{domain} filename:".env"||".htaccess"||"wp-config.php"',
+            "server_status": 'site:{domain} intitle:"Apache Status"||"nginx status"',
+            "webserver_version": 'site:{domain} intitle:"Index of /" + "server at"',
         }
         self.search_engines = {
             "google": "https://www.google.com/search?q={query}&num=100",
@@ -69,33 +78,13 @@ class JusDoorkin:
         os.makedirs(self.output_dir, exist_ok=True)
 
     def generate_query(self, domain, query_type):
-        """
-        Generate a Google dork query for a given domain and query type.
-
-        Args:
-            domain (str): The target domain.
-            query_type (str): The type of query to generate.
-
-        Returns:
-            str: The generated query.
-        """
+        """Generate a Google dork query for a given domain and query type."""
         return self.patterns[query_type].format(domain=domain)
 
     @sleep_and_retry
     @limits(calls=REQUESTS_PER_FIFTEEN_MINUTES, period=FIFTEEN_MINUTES)
     def search_query(self, query, query_type, domain, engine="google"):
-        """
-        Execute a search query and process the results.
-
-        Args:
-            query (str): The search query to execute.
-            query_type (str): The type of query being executed.
-            domain (str): The target domain.
-            engine (str): The search engine to use.
-
-        Returns:
-            list or str: The processed search results.
-        """
+        """Execute a search query and process the results."""
         url = self.search_engines[engine].format(query=query)
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
 
@@ -127,17 +116,7 @@ class JusDoorkin:
             return result_stats_match.group(1) if result_stats_match else 'Unknown'
 
     def perform_dork_scan(self, domains, query_types=None, engines=None):
-        """
-        Perform a dork scan on the specified domains.
-
-        Args:
-            domains (list): List of domains to scan.
-            query_types (list): List of query types to use.
-            engines (list): List of search engines to use.
-
-        Returns:
-            dict: The scan results.
-        """
+        """Perform a dork scan on the specified domains."""
         results = {domain: {} for domain in domains}
         queries = self.patterns if query_types is None else {qt: self.patterns[qt] for qt in query_types}
         engines = engines or ["google"]
@@ -164,15 +143,7 @@ class JusDoorkin:
         return results
 
     def analyze_results(self, results):
-        """
-        Analyze the scan results to identify potential vulnerabilities and interesting findings.
-
-        Args:
-            results (dict): The scan results to analyze.
-
-        Returns:
-            dict: The analysis results.
-        """
+        """Analyze the scan results to identify potential vulnerabilities and interesting findings."""
         analysis = {}
         for domain, engines in results.items():
             analysis[domain] = {
@@ -181,6 +152,7 @@ class JusDoorkin:
                 "potential_vulnerabilities": [],
                 "interesting_files": [],
                 "exposed_endpoints": [],
+                "leaked_information": [],
             }
             for engine, data in engines.items():
                 analysis[domain]["total_subdomains"] += len(data.get("subdomain", []))
@@ -196,8 +168,6 @@ class JusDoorkin:
                     analysis[domain]["potential_vulnerabilities"].append("Exposed Database Dumps")
                 if data.get("api_endpoints"):
                     analysis[domain]["exposed_endpoints"].extend(data.get("api_endpoints", []))
-                
-                # Additional checks
                 if data.get("admin_url"):
                     analysis[domain]["potential_vulnerabilities"].append("Exposed Admin Interfaces")
                 if data.get("documents"):
@@ -206,17 +176,21 @@ class JusDoorkin:
                     analysis[domain]["potential_vulnerabilities"].append("Exposed Cloud Storage")
                 if data.get("wordpress_files"):
                     analysis[domain]["potential_vulnerabilities"].append("WordPress Installation")
+                if data.get("github_leaks"):
+                    analysis[domain]["leaked_information"].append("Potential GitHub Leaks")
+                if data.get("pastebin_leaks"):
+                    analysis[domain]["leaked_information"].append("Potential Pastebin Leaks")
+                if data.get("exposed_env_files"):
+                    analysis[domain]["potential_vulnerabilities"].append("Exposed Environment Files")
+                if data.get("server_status"):
+                    analysis[domain]["potential_vulnerabilities"].append("Exposed Server Status")
+                if data.get("webserver_version"):
+                    analysis[domain]["potential_vulnerabilities"].append("Exposed Webserver Version")
 
         return analysis
 
-    def generate_report(self, results, analysis):
-        """
-        Generate an HTML report of the scan results and analysis.
-
-        Args:
-            results (dict): The scan results.
-            analysis (dict): The analysis of the scan results.
-        """
+    def generate_report(self, results, analysis, additional_checks):
+        """Generate an HTML report of the scan results, analysis, and additional security checks."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         report_file = os.path.join(self.output_dir, f"report_{timestamp}.html")
 
@@ -224,7 +198,7 @@ class JusDoorkin:
             f.write("""
             <html>
             <head>
-                <title>JusDoorkin Scan Report</title>
+                <title>JusDoorkin Enhanced Scan Report</title>
                 <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
                 <style>
                     body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f0f0f0; }
@@ -235,11 +209,14 @@ class JusDoorkin:
                     th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
                     th { background-color: #f2f2f2; }
                     tr:nth-child(even) { background-color: #f9f9f9; }
+                    .vulnerability-high { color: #ff0000; }
+                    .vulnerability-medium { color: #ffa500; }
+                    .vulnerability-low { color: #ffff00; }
                 </style>
             </head>
             <body>
                 <div class="container">
-                    <h1>JusDoorkin Scan Report</h1>
+                    <h1>JusDoorkin Enhanced Scan Report</h1>
             """)
 
             # Create a bar chart for subdomain and email counts
@@ -263,7 +240,8 @@ class JusDoorkin:
                 if domain_analysis['potential_vulnerabilities']:
                     f.write("<h3>Potential Vulnerabilities:</h3><ul>")
                     for vuln in domain_analysis['potential_vulnerabilities']:
-                        f.write(f"<li>{vuln}</li>")
+                        severity = self.get_vulnerability_severity(vuln)
+                        f.write(f'<li class="vulnerability-{severity}">{vuln} (Severity: {severity.capitalize()})</li>')
                     f.write("</ul>")
 
                 if domain_analysis['interesting_files']:
@@ -278,6 +256,18 @@ class JusDoorkin:
                         f.write(f"<li>{endpoint}</li>")
                     f.write("</ul>")
 
+                if domain_analysis['leaked_information']:
+                    f.write("<h3>Potential Information Leaks:</h3><ul>")
+                    for leak in domain_analysis['leaked_information']:
+                        f.write(f"<li>{leak}</li>")
+                    f.write("</ul>")
+
+                f.write("<h3>Additional Security Checks:</h3>")
+                f.write("<table><tr><th>Check</th><th>Result</th></tr>")
+                for check, result in additional_checks[domain].items():
+                    f.write(f"<tr><td>{check}</td><td>{result}</td></tr>")
+                f.write("</table>")
+
                 f.write("<h3>Detailed Results:</h3>")
                 for engine, engine_data in results[domain].items():
                     f.write(f"<h4>Engine: {engine}</h4>")
@@ -288,8 +278,8 @@ class JusDoorkin:
                             f.write("<ul>")
                             for item in result[:20]:  # Limit to first 20 items
                                 f.write(f"<li>{item}</li>")
-                            if len(result) > 20:
-                                f.write(f"<li>... and {len(result) - 20} more</li>")
+                                if len(result) > 20:
+                                    f.write(f"<li>... and {len(result) - 20} more</li>")
                             f.write("</ul>")
                         else:
                             f.write(f"{result}")
@@ -298,108 +288,196 @@ class JusDoorkin:
 
             f.write("</div></body></html>")
 
-        logger.info(f"Report generated: {report_file}")
+            logger.info(f"Report generated: {report_file}")
 
-def print_banner():
-    """Print the JusDoorkin banner."""
-    f = Figlet(font='col')
-    print(Fore.CYAN + f.renderText('JusDoorkin'))
-    print(Fore.YELLOW + "Advanced Google Dork Query Generator" + Style.RESET_ALL)
-    print(Fore.RED + "Use responsibly and ethically. Don't perform scans without permission." + Style.RESET_ALL)
-    print("\nThis tool generates Google dork queries to find potentially sensitive information about specified domains.")
-    print()
+    def get_vulnerability_severity(self, vulnerability):
+        """Determine the severity of a vulnerability."""
+        high_severity = ["SQL Injection", "Exposed Database Dumps", "Exposed Environment Files"]
+        medium_severity = ["Directory Listing", "Exposed Admin Interfaces", "Exposed Cloud Storage"]
 
-def get_domains():
-    """
-    Get domain input from the user.
+        if vulnerability in high_severity:
+            return "high"
+        elif vulnerability in medium_severity:
+            return "medium"
+        else:
+            return "low"
 
-    Returns:
-        list: List of domains to scan.
-    """
-    while True:
+    def perform_additional_checks(self, domain):
+        """Perform additional security checks on the domain."""
+        checks = {}
+
+        # DNS check
         try:
-            domains = [domain.strip() for domain in input("Enter domain(s) to scan (separate multiple domains with commas): ").split(',')]
-            if not domains or any(not validators.domain(domain) for domain in domains):
-                raise ValueError("Invalid input. Please enter valid domain names.")
-            return domains
-        except ValueError as e:
-            print(Fore.RED + str(e) + Style.RESET_ALL)
+            dns = socket.gethostbyname(domain)
+            checks["DNS Resolution"] = f"Resolved to {dns}"
+        except socket.gaierror:
+            checks["DNS Resolution"] = "Failed to resolve"
 
-def get_query_types(dorker):
-    """
-    Get query types from the user.
-
-    Args:
-        dorker (JusDoorkin): The JusDoorkin object.
-
-    Returns:
-        list or None: List of query types to use, or None for all types.
-    """
-    print("\nAvailable query types:")
-    for i, query_type in enumerate(dorker.patterns.keys(), 1):
-        print(f"{i}. {query_type}")
-    print("0. All query types")
-
-    while True:
+        # WHOIS information
         try:
-            choice = input("\nEnter the numbers of query types you want to use (comma-separated), or 0 for all: ")
-            if choice == '0':
-                return None
-            choices = [int(c.strip()) for c in choice.split(',')]
-            if not all(1 <= c <= len(dorker.patterns) for c in choices):
-                raise ValueError("Invalid choices. Please enter valid numbers.")
-            return [list(dorker.patterns.keys())[c-1] for c in choices]
-        except ValueError as e:
-            print(Fore.RED + str(e) + Style.RESET_ALL)
+            whois_info = whois.whois(domain)
+            checks["WHOIS"] = f"Registrar: {whois_info.registrar}, Creation Date: {whois_info.creation_date}"
+        except Exception as e:
+            checks["WHOIS"] = f"Error: {str(e)}"
 
-def get_search_engines(dorker):
-    """
-    Get search engines from the user.
-
-    Args:
-        dorker (JusDoorkin): The JusDoorkin object.
-
-    Returns:
-        list: List of search engines to use.
-    """
-    print("\nAvailable search engines:")
-    for i, engine in enumerate(dorker.search_engines.keys(), 1):
-        print(f"{i}. {engine}")
-
-    while True:
+        # SSL certificate check
         try:
-            choice = input("\nEnter the numbers of search engines you want to use (comma-separated): ")
-            choices = [int(c.strip()) for c in choice.split(',')]
-            if not all(1 <= c <= len(dorker.search_engines) for c in choices):
-                raise ValueError("Invalid choices. Please enter valid numbers.")
-            return [list(dorker.search_engines.keys())[c-1] for c in choices]
-        except ValueError as e:
-            print(Fore.RED + str(e) + Style.RESET_ALL)
+            cert = ssl.get_server_certificate((domain, 443))
+            x509 = OpenSSL.crypto.load_certificate(OpenSSL.crypto.FILETYPE_PEM, cert)
+            cert_exp = x509.get_notAfter().decode('ascii')
+            checks["SSL Certificate"] = f"Valid until {cert_exp}"
+        except Exception as e:
+            checks["SSL Certificate"] = f"Error: {str(e)}"
+
+        # HTTP headers check
+        try:
+            response = requests.get(f"https://{domain}", timeout=10)
+            server = response.headers.get('Server', 'Not disclosed')
+            checks["Web Server"] = server
+        except Exception as e:
+            checks["Web Server"] = f"Error: {str(e)}"
+
+        return checks
+
+    def crawl_website(self, domain, max_pages=10):
+        """Perform a basic crawl of the website to identify potential security issues."""
+        visited = set()
+        to_visit = [f"https://{domain}"]
+        findings = []
+
+        class MyHTMLParser(HTMLParser):
+            def handle_comment(self, data):
+                if re.search(r'password|api_key|secret', data, re.I):
+                    findings.append(f"{url}: Potential sensitive information in HTML comment")
+
+        while to_visit and len(visited) < max_pages:
+            url = to_visit.pop(0)
+            if url in visited:
+                continue
+
+            try:
+                response = requests.get(url, timeout=10)
+                visited.add(url)
+
+                # Check for security headers
+                security_headers = {
+                    'Strict-Transport-Security': 'HSTS not set',
+                    'X-Frame-Options': 'X-Frame-Options not set',
+                    'X-XSS-Protection': 'X-XSS-Protection not set',
+                    'X-Content-Type-Options': 'X-Content-Type-Options not set',
+                    'Referrer-Policy': 'Referrer-Policy not set',
+                    'Content-Security-Policy': 'CSP not set'
+                }
+                for header, message in security_headers.items():
+                    if header not in response.headers:
+                        findings.append(f"{url}: {message}")
+
+                # Parse HTML and extract links
+                soup = BeautifulSoup(response.text, 'html.parser')
+                for link in soup.find_all('a', href=True):
+                    new_url = urljoin(url, link['href'])
+                    if new_url.startswith(f"https://{domain}") and new_url not in visited:
+                        to_visit.append(new_url)
+
+                # Check for potential sensitive information in HTML comments
+                parser = MyHTMLParser()
+                parser.feed(response.text)
+
+            except Exception as e:
+                findings.append(f"{url}: Error during crawl - {str(e)}")
+
+        return findings
+
+    def print_banner():
+        """Print the JusDoorkin banner."""
+        f = Figlet(font='slant')
+        print(Fore.CYAN + f.renderText('JusDoorkin'))
+        print(Fore.YELLOW + "Enhanced Google Dork Query Generator and Security Analyzer" + Style.RESET_ALL)
+        print(Fore.RED + "Use responsibly and ethically. Don't perform scans without permission." + Style.RESET_ALL)
+        print("\nThis tool generates Google dork queries and performs additional security checks on specified domains.")
+        print()
+
+    def get_domains():
+        """Get domain input from the user."""
+        while True:
+            try:
+                domains = [domain.strip() for domain in input("Enter domain(s) to scan (separate multiple domains with commas): ").split(',')]
+                if not domains or any(not validators.domain(domain) for domain in domains):
+                    raise ValueError("Invalid input. Please enter valid domain names.")
+                return domains
+            except ValueError as e:
+                print(Fore.RED + str(e) + Style.RESET_ALL)
+
+    def get_query_types(self, dorker):
+        """Get query types from the user."""
+        print("\nAvailable query types:")
+        for i, query_type in enumerate(dorker.patterns.keys(), 1):
+            print(f"{i}. {query_type}")
+        print("0. All query types")
+
+        while True:
+            try:
+                choice = input("\nEnter the numbers of query types you want to use (comma-separated), or 0 for all: ")
+                if choice == '0':
+                    return None
+                choices = [int(c.strip()) for c in choice.split(',')]
+                if not all(1 <= c <= len(dorker.patterns) for c in choices):
+                    raise ValueError("Invalid choices. Please enter valid numbers.")
+                return [list(dorker.patterns.keys())[c-1] for c in choices]
+            except ValueError as e:
+                print(Fore.RED + str(e) + Style.RESET_ALL)
+
+    def get_search_engines(self, dorker):
+        """Get search engines from the user."""
+        print("\nAvailable search engines:")
+        for i, engine in enumerate(dorker.search_engines.keys(), 1):
+            print(f"{i}. {engine}")
+
+        while True:
+            try:
+                choice = input("\nEnter the numbers of search engines you want to use (comma-separated): ")
+                choices = [int(c.strip()) for c in choice.split(',')]
+                if not all(1 <= c <= len(dorker.search_engines) for c in choices):
+                    raise ValueError("Invalid choices. Please enter valid numbers.")
+                return [list(dorker.search_engines.keys())[c-1] for c in choices]
+            except ValueError as e:
+                print(Fore.RED + str(e) + Style.RESET_ALL)
 
 def main():
-    """Main function to run the JusDoorkin tool."""
-    print_banner()
+    """Main function to run the enhanced JusDoorkin tool."""
+    JusDoorkin.print_banner()
 
-    parser = argparse.ArgumentParser(description="JusDoorkin - Advanced Google Dork Query Generator")
+    parser = argparse.ArgumentParser(description="JusDoorkin - Enhanced Google Dork Query Generator and Security Analyzer")
     parser.add_argument("-o", "--output", help="Specify output directory", default="results")
+    parser.add_argument("-m", "--max-pages", type=int, default=10, help="Maximum number of pages to crawl per domain")
     args = parser.parse_args()
 
     dorker = JusDoorkin(output_dir=args.output)
 
-    domains = get_domains()
-    query_types = get_query_types(dorker)
-    engines = get_search_engines(dorker)
+    domains = JusDoorkin.get_domains()
+    query_types = dorker.get_query_types(dorker)
+    engines = dorker.get_search_engines(dorker)
 
-    print(Fore.CYAN + "\nStarting scan..." + Style.RESET_ALL)
+    print(Fore.CYAN + "\nStarting enhanced scan..." + Style.RESET_ALL)
     results = dorker.perform_dork_scan(domains, query_types, engines)
 
     print(Fore.CYAN + "\nAnalyzing results..." + Style.RESET_ALL)
     analysis = dorker.analyze_results(results)
 
-    print(Fore.CYAN + "\nGenerating report..." + Style.RESET_ALL)
-    dorker.generate_report(results, analysis)
+    print(Fore.CYAN + "\nPerforming additional security checks..." + Style.RESET_ALL)
+    additional_checks = {}
+    for domain in domains:
+        additional_checks[domain] = dorker.perform_additional_checks(domain)
 
-    print(Fore.GREEN + "\nScan completed. Check the results directory for the report." + Style.RESET_ALL)
+    print(Fore.CYAN + "\nCrawling websites..." + Style.RESET_ALL)
+    for domain in domains:
+        crawl_findings = dorker.crawl_website(domain, max_pages=args.max_pages)
+        additional_checks[domain]["Website Crawl Findings"] = crawl_findings
+
+    print(Fore.CYAN + "\nGenerating comprehensive report..." + Style.RESET_ALL)
+    dorker.generate_report(results, analysis, additional_checks)
+
+    print(Fore.GREEN + "\nEnhanced scan completed. Check the results directory for the comprehensive report." + Style.RESET_ALL)
 
 if __name__ == "__main__":
     main()
